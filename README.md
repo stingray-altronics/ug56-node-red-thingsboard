@@ -100,8 +100,6 @@ Se mantiene una pausa mínima de dos segundos entre órdenes y protección de ID
 
 El flujo conserva el timestamp original. Reproducir las muestras no crea mediciones actuales; ajustar la ventana temporal del dashboard.
 
-**29 comprobaciones locales aprobadas**: muestras, bytes, ocho acciones por la misma salida dinámica, variables, validación y estados. No se ejecutó la broker local del UG56 ni se accedió al ThingsBoard del usuario. Completar el ensayo real antes del taller.
-
 ## Fuentes
 
 - [Milesight: LoRa Input y codec](https://support.milesight-iot.com/support/solutions/articles/73000535734-how-to-use-decoder-on-node-red)
