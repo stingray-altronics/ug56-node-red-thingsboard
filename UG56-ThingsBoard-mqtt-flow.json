@@ -1,0 +1,401 @@
+[
+  {
+    "id": "openlab_ug56_mqtt",
+    "type": "tab",
+    "label": "Open Lab UG56 MQTT - ThingsBoard",
+    "disabled": false,
+    "info": "Revision MQTT local. Leer README.md. MQTT local LNS y MQTT ThingsBoard separados. Deshabilitar la version anterior antes de Deploy. Requiere Node-RED 2.1+ para variables de pestana. Comandos inicialmente en simulacion.",
+    "env": [
+      {
+        "name": "LT_DEVEUI",
+        "value": "",
+        "type": "str"
+      },
+      {
+        "name": "AM_DEVEUI",
+        "value": "",
+        "type": "str"
+      },
+      {
+        "name": "LNS_UPLINK_TOPIC",
+        "value": "application/2/device/+/rx",
+        "type": "str"
+      },
+      {
+        "name": "LNS_DOWNLINK_APP_ID",
+        "value": "2",
+        "type": "str"
+      },
+      {
+        "name": "ENABLE_DOWNLINK",
+        "value": "false",
+        "type": "bool"
+      },
+      {
+        "name": "LT_DOWNLINK_FPORT",
+        "value": "2",
+        "type": "num"
+      },
+      {
+        "name": "STATE_MAX_AGE_S",
+        "value": "900",
+        "type": "num"
+      }
+    ]
+  },
+  {
+    "id": "localmqtt_guide",
+    "type": "comment",
+    "z": "openlab_ug56_mqtt",
+    "name": "1. Dos brokers: LNS local y ThingsBoard",
+    "x": 310,
+    "y": 40,
+    "wires": [],
+    "info": "LNS MQTT en 127.0.0.1:1883 segun configuracion del instructor. Introducir credenciales del broker local en Security. Configurar LNS_UPLINK_TOPIC y LNS_DOWNLINK_APP_ID para la aplicacion real; 2 es solo un ejemplo. Deshabilitar la version anterior. ENABLE_DOWNLINK=false simula."
+  },
+  {
+    "id": "localmqtt_up",
+    "type": "mqtt in",
+    "z": "openlab_ug56_mqtt",
+    "name": "Uplinks LNS local",
+    "x": 160,
+    "y": 140,
+    "wires": [
+      [
+        "localmqtt_normalize",
+        "localmqtt_rawdebug"
+      ]
+    ],
+    "topic": "${LNS_UPLINK_TOPIC}",
+    "qos": "0",
+    "datatype": "json",
+    "broker": "localmqtt_lns",
+    "nl": false,
+    "rap": true,
+    "rh": 0,
+    "inputs": 0
+  },
+  {
+    "id": "localmqtt_rawdebug",
+    "type": "debug",
+    "z": "openlab_ug56_mqtt",
+    "name": "MQTT LNS: mensaje completo",
+    "x": 420,
+    "y": 90,
+    "wires": [],
+    "active": false,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "true",
+    "targetType": "full"
+  },
+  {
+    "id": "localmqtt_normalize",
+    "type": "function",
+    "z": "openlab_ug56_mqtt",
+    "name": "Uplink generico: object a ThingsBoard",
+    "x": 450,
+    "y": 140,
+    "wires": [
+      [
+        "localmqtt_ltstate"
+      ]
+    ],
+    "func": "try {\n    const hasEui = p => p && typeof p === 'object' && (p.deveui || p.devEUI || p.eui);\n    let p = hasEui(msg) ? msg : msg.payload;\n    if (Buffer.isBuffer(p)) p = p.toString('utf8');\n    if (typeof p === 'string') p = JSON.parse(p);\n    if (!p || typeof p !== 'object' || Array.isArray(p)) throw Error('Uplink JSON invalido');\n    const eui = String(p.deveui || p.devEUI || p.eui || '').trim().toLowerCase();\n    if (!/^[0-9a-f]{16}$/.test(eui)) throw Error('DevEUI invalido');\n    let decoded = p.object;\n    if (typeof decoded === 'string') decoded = JSON.parse(decoded);\n    if (!decoded || typeof decoded !== 'object' || Array.isArray(decoded)) {\n      throw Error('Falta object decodificado: asignar codec en LNS; no se interpreta el payload binario');\n    }\n    const values = {};\n    Object.keys(decoded).forEach(k => {\n      if (['__proto__','constructor','prototype'].includes(k)) return;\n      const v = decoded[k];\n      if (typeof v === 'string' || typeof v === 'boolean' || (typeof v === 'number' && Number.isFinite(v))) values[k] = v;\n      // Preserve compound values as JSON text without guessing flattening rules.\n      else if (v !== null && typeof v === 'object') values[k] = JSON.stringify(v);\n    });\n    if (!Object.keys(values).length) throw Error('object no contiene valores publicables');\n    const rx = Array.isArray(p.rxInfo) ? (p.rxInfo[0] || {}) : {};\n    const tx = p.txInfo || {};\n    const dr = p.dr || tx.dataRate || {};\n    const first = (...items) => items.find(x => x !== undefined && x !== null);\n    const metadata = {rssi:first(p.rssi,rx.rssi),snr:first(p.snr,rx.loRaSNR),\n      frame_count:first(p.fcnt,p.fCnt,p.frameCount),fport:first(p.fport,p.fPort,p.port),\n      frequency:first(p.freq,p.frequency,tx.frequency),\n      spreading_factor:dr.spreadFactor,bandwidth_khz:dr.bandwidth};\n    // Codec keys take precedence; radio metadata never overwrites sensor data.\n    Object.keys(metadata).forEach(k => {\n      if (!Object.prototype.hasOwnProperty.call(values,k) && typeof metadata[k] === 'number' && Number.isFinite(metadata[k])) values[k] = metadata[k];\n    });\n    const time = first(p.time,rx.time);\n    let ts = typeof time === 'string' ? Date.parse(time) : NaN;\n    const source = !Number.isFinite(ts) || ts > Date.now()+300000 ? 'node_red' : 'gateway';\n    if (source === 'node_red') ts = Date.now();\n    if (!Object.prototype.hasOwnProperty.call(values,'timestamp_source')) values.timestamp_source = source;\n    const seen = flow.get('uplink_devices') || [];\n    if (!seen.includes(eui)) {seen.push(eui);flow.set('uplink_devices',seen);}\n    const connect = {topic:'v1/gateway/connect',payload:{device:eui},qos:'1',retain:false};\n    const telemetry = {topic:'v1/gateway/telemetry',payload:{[eui]:[{ts,values}]},qos:'1',retain:false};\n    return [[connect,telemetry]];\n  } catch (err) {node.error(err.message,msg);return null;}",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": []
+  },
+  {
+    "id": "localmqtt_ltstate",
+    "type": "function",
+    "z": "openlab_ug56_mqtt",
+    "name": "Opcional LT: estados para RPC",
+    "x": 650,
+    "y": 250,
+    "wires": [
+      [
+        "localmqtt_tbout",
+        "localmqtt_telemetrydebug"
+      ]
+    ],
+    "func": "const lt = String(env.get('LT_DEVEUI') || '').toLowerCase();\n  if (msg.topic !== 'v1/gateway/telemetry' || !msg.payload || !Array.isArray(msg.payload[lt])) return msg;\n  msg.payload[lt].forEach(sample => {\n    const values = sample.values;\n    ['RO1','RO2'].forEach(k => {\n      if (values[k+'_status'] === 'ON') values[k.toLowerCase()+'_active'] = true;\n      if (values[k+'_status'] === 'OFF') values[k.toLowerCase()+'_active'] = false;\n    });\n    ['DO1','DO2'].forEach(k => {\n      if (values[k+'_status'] === 'L') values[k.toLowerCase()+'_active'] = true;\n      if (values[k+'_status'] === 'H') values[k.toLowerCase()+'_active'] = false;\n    });\n    // Do not refresh the control cache on frames that contain no output states.\n    if (!['ro1_active','ro2_active','do1_active','do2_active'].some(k => typeof values[k] === 'boolean')) return;\n    const old = flow.get('lt_state');\n    if (!old || sample.ts >= old.ts) flow.set('lt_state',{ts:sample.ts,values:{...values}});\n  });\n  return msg;",
+    "outputs": 1,
+    "noerr": 0
+  },
+  {
+    "id": "localmqtt_tbout",
+    "type": "mqtt out",
+    "z": "openlab_ug56_mqtt",
+    "name": "ThingsBoard Gateway API",
+    "x": 790,
+    "y": 140,
+    "wires": [],
+    "topic": "",
+    "qos": "1",
+    "retain": "false",
+    "broker": "localmqtt_tb"
+  },
+  {
+    "id": "localmqtt_telemetrydebug",
+    "type": "debug",
+    "z": "openlab_ug56_mqtt",
+    "name": "Telemetria enviada (activar para revisar)",
+    "x": 810,
+    "y": 200,
+    "wires": [],
+    "active": false,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "true",
+    "targetType": "full"
+  },
+  {
+    "id": "localmqtt_manual",
+    "type": "inject",
+    "z": "openlab_ug56_mqtt",
+    "name": "Registrar dispositivos conocidos",
+    "x": 170,
+    "y": 240,
+    "wires": [
+      [
+        "localmqtt_register"
+      ]
+    ],
+    "props": [
+      {
+        "p": "payload"
+      }
+    ],
+    "payload": "",
+    "payloadType": "date",
+    "repeat": "",
+    "crontab": "",
+    "once": true,
+    "onceDelay": 3
+  },
+  {
+    "id": "localmqtt_tbstatus",
+    "type": "status",
+    "z": "openlab_ug56_mqtt",
+    "name": "Reconexion ThingsBoard",
+    "x": 170,
+    "y": 300,
+    "wires": [
+      [
+        "localmqtt_connected"
+      ]
+    ],
+    "scope": [
+      "localmqtt_tbout"
+    ]
+  },
+  {
+    "id": "localmqtt_connected",
+    "type": "function",
+    "z": "openlab_ug56_mqtt",
+    "name": "Solo al conectar",
+    "x": 430,
+    "y": 300,
+    "wires": [
+      [
+        "localmqtt_register"
+      ]
+    ],
+    "func": "if (msg.status && msg.status.fill === 'green' && msg.status.shape === 'dot') return msg;\nreturn null;",
+    "outputs": 1,
+    "noerr": 0
+  },
+  {
+    "id": "localmqtt_register",
+    "type": "function",
+    "z": "openlab_ug56_mqtt",
+    "name": "Registrar DevEUI en ThingsBoard",
+    "x": 470,
+    "y": 240,
+    "wires": [
+      [
+        "localmqtt_tbout"
+      ]
+    ],
+    "func": "const ids = [...new Set([...(flow.get('uplink_devices') || []),env.get('LT_DEVEUI'),env.get('AM_DEVEUI')]\n    .map(x => String(x || '').toLowerCase()).filter(x => /^[0-9a-f]{16}$/.test(x)))];\n  return ids.length ? [ids.map(device => ({topic:'v1/gateway/connect',payload:{device},qos:'1',retain:false}))] : null;",
+    "outputs": 1,
+    "noerr": 0
+  },
+  {
+    "id": "localmqtt_rpccomment",
+    "type": "comment",
+    "z": "openlab_ug56_mqtt",
+    "name": "2. RPC: solicitud, validacion y estado por uplink",
+    "x": 340,
+    "y": 380,
+    "wires": []
+  },
+  {
+    "id": "localmqtt_rpcin",
+    "type": "mqtt in",
+    "z": "openlab_ug56_mqtt",
+    "name": "RPC ThingsBoard",
+    "x": 150,
+    "y": 440,
+    "wires": [
+      [
+        "localmqtt_rpc"
+      ]
+    ],
+    "topic": "v1/gateway/rpc",
+    "qos": "1",
+    "datatype": "json",
+    "broker": "localmqtt_tb",
+    "nl": false,
+    "rap": true,
+    "rh": 0,
+    "inputs": 0
+  },
+  {
+    "id": "localmqtt_rpc",
+    "type": "function",
+    "z": "openlab_ug56_mqtt",
+    "name": "Control RO1 RO2 DO1 DO2",
+    "x": 460,
+    "y": 440,
+    "wires": [
+      [
+        "localmqtt_down"
+      ],
+      [
+        "localmqtt_tbout"
+      ],
+      [
+        "localmqtt_cmddebug"
+      ]
+    ],
+    "func": "let p;\n  try {\n    p = msg.payload;\n    if (Buffer.isBuffer(p)) p = p.toString('utf8');\n    if (typeof p === 'string') p = JSON.parse(p);\n    // A gateway RPC reply has a top-level id and no data.method. Ignore echoes.\n    if (!p || !p.data || typeof p.data.method !== 'string') return null;\n  } catch (err) {node.error('RPC JSON invalido', msg); return null;}\n  const id = p.data.id;\n  if (!Number.isInteger(id) || typeof p.device !== 'string') {node.error('RPC sin id numerico o device', msg); return null;}\n  const reply = data => ({topic:'v1/gateway/rpc',payload:{device:p.device,id,data},qos:'1',retain:false});\n  const fail = error => [null,reply({accepted:false,error}),null];\n  const lt = String(env.get('LT_DEVEUI') || '').toLowerCase();\n  if (p.device !== lt) return fail('Solo se controla el LT22222 registrado; usar DevEUI en minusculas');\n  const match = /^(get|set)(RO1|RO2|DO1|DO2)$/.exec(p.data.method);\n  if (!match) return fail('Metodo permitido: get/setRO1, RO2, DO1 o DO2');\n  const output = match[2];\n  if (match[1] === 'get') {\n    const cached = flow.get('lt_state');\n    const maxAge = Number(env.get('STATE_MAX_AGE_S') || 900)*1000;\n    const key = output.toLowerCase()+'_active';\n    if (!cached || Date.now()-cached.ts > maxAge || typeof cached.values[key] !== 'boolean') return fail('Estado ausente o antiguo: esperar uplink reciente');\n    return [null,reply(cached.values[key]),null];\n  }\n  const val = p.data.params;\n  if (![true,false,0,1].includes(val)) return fail('params debe ser booleano true/false o numero 0/1');\n  const active = val === true || val === 1;\n  const now = Date.now();\n  const cache = flow.get('rpc_seen') || {};\n  Object.keys(cache).forEach(k => {if (now-cache[k].ts > 120000) delete cache[k];});\n  const key = p.device+':'+id;\n  const signature = JSON.stringify([p.data.method,active]);\n  if (cache[key]) {\n    if (cache[key].signature !== signature) return fail('ID RPC reutilizado con otro comando');\n    return [null,reply(cache[key].result),null];\n  }\n  const bytes = output.startsWith('RO') ? [0x03,0x11,0x11] : [0x02,0x11,0x11,0x11];\n  bytes[Number(output.slice(-1))] = active ? 0x01 : 0x00;\n  const port = Number(env.get('LT_DOWNLINK_FPORT') || 2);\n  if (!Number.isInteger(port) || port < 1 || port > 223) return fail('FPort invalido');\n  const app = String(env.get('LNS_DOWNLINK_APP_ID') || '').trim();\n  if (!/^\\d+$/.test(app)) return fail('LNS_DOWNLINK_APP_ID debe ser numerico');\n  const packet = {topic:'application/'+app+'/device/'+lt+'/tx',\n    payload:{confirmed:false,fport:port,data:Buffer.from(bytes).toString('base64')},\n    qos:'0',retain:false,command_key:output+':'+(active ? '1' : '0')};\n  const diagnostic = {payload:{output,active,hex:Buffer.from(bytes).toString('hex'),\n    base64:Buffer.from(bytes).toString('base64'),eui:lt,port,topic:packet.topic,command_key:packet.command_key}};\n  const enabled = String(env.get('ENABLE_DOWNLINK')).toLowerCase() === 'true';\n  if (!enabled) return [null,reply({accepted:false,stage:'simulation',hex:diagnostic.payload.hex}),diagnostic];\n  const last = flow.get('last_command_ms') || 0;\n  if (now-last < 2000) return fail('Esperar al menos 2 segundos entre comandos');\n  flow.set('last_command_ms',now);\n  const result = {accepted:true,stage:'submitted_to_mqtt_node',executed:false,output,requested:active};\n  cache[key] = {ts:now,signature,result}; flow.set('rpc_seen',cache);\n  // This reply confirms preparation only. Actual state arrives as telemetry.\n  return [packet,reply(result),diagnostic];",
+    "outputs": 3,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "outputLabels": [
+      "Downlink UG56",
+      "Respuesta RPC",
+      "Diagnostico"
+    ]
+  },
+  {
+    "id": "localmqtt_down",
+    "type": "mqtt out",
+    "z": "openlab_ug56_mqtt",
+    "name": "Downlink LNS local",
+    "x": 820,
+    "y": 440,
+    "wires": [],
+    "topic": "",
+    "qos": "0",
+    "retain": "false",
+    "broker": "localmqtt_lns"
+  },
+  {
+    "id": "localmqtt_cmddebug",
+    "type": "debug",
+    "z": "openlab_ug56_mqtt",
+    "name": "Comando preparado / simulacion",
+    "x": 490,
+    "y": 540,
+    "wires": [],
+    "active": true,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg"
+  },
+  {
+    "id": "localmqtt_catch",
+    "type": "catch",
+    "z": "openlab_ug56_mqtt",
+    "name": "Errores del flujo",
+    "x": 160,
+    "y": 650,
+    "wires": [
+      [
+        "localmqtt_errors"
+      ]
+    ],
+    "scope": null,
+    "uncaught": false
+  },
+  {
+    "id": "localmqtt_errors",
+    "type": "debug",
+    "z": "openlab_ug56_mqtt",
+    "name": "Error: revisar mensaje y configuracion",
+    "x": 480,
+    "y": 650,
+    "wires": [],
+    "active": true,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "true",
+    "targetType": "full"
+  },
+  {
+    "id": "localmqtt_note",
+    "type": "comment",
+    "z": "openlab_ug56_mqtt",
+    "name": "3. Downlink: topic dinamico y fport en minusculas",
+    "x": 400,
+    "y": 740,
+    "wires": [],
+    "info": "Function construye application/<ID>/device/<EUI>/tx y {confirmed:false,fport:2,data:<Base64>}. Topic del MQTT out vacio. ID de aplicacion independiente del FPort. El puerto MQTT local es 1883; no confundir con la interfaz web."
+  },
+  {
+    "id": "localmqtt_lns",
+    "type": "mqtt-broker",
+    "name": "EDITAR CREDENCIALES - LNS local UG56",
+    "broker": "127.0.0.1",
+    "port": "1883",
+    "clientid": "",
+    "autoConnect": true,
+    "usetls": false,
+    "protocolVersion": "4",
+    "keepalive": "60",
+    "cleansession": true,
+    "autoUnsubscribe": true
+  },
+  {
+    "id": "localmqtt_tb",
+    "type": "mqtt-broker",
+    "name": "EDITAR - ThingsBoard CE 3.5.0",
+    "broker": "thingsboard.example.invalid",
+    "port": "8883",
+    "clientid": "",
+    "autoConnect": true,
+    "usetls": true,
+    "tls": "localmqtt_tb_tls",
+    "protocolVersion": "4",
+    "keepalive": "60",
+    "cleansession": true,
+    "autoUnsubscribe": true
+  },
+  {
+    "id": "localmqtt_tb_tls",
+    "type": "tls-config",
+    "name": "ThingsBoard - verificar certificado",
+    "cert": "",
+    "key": "",
+    "ca": "",
+    "certname": "",
+    "keyname": "",
+    "caname": "",
+    "servername": "",
+    "verifyservercert": true,
+    "alpnprotocol": ""
+  }
+]
