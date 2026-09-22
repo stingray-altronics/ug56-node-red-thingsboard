@@ -1,114 +1,164 @@
-# IOT Open Lab: UG56 con MQTT local
+# UG56 → ThingsBoard: registro de dispositivos y downlinks genéricos
 
-Versión actual: nodos estándar MQTT in/out, LNS Milesight embebido y Node-RED dentro del UG56. AM102, LT-22222-L, AU915 8–15 y ThingsBoard CE 3.5.0.
+Flujo v2 para Node-RED dentro del UG56, LNS Milesight embebido y ThingsBoard CE 3.5.0. MQTT estándar, uplink genérico, control de RO/DO del LT-22222-L e intervalo de reporte de LT-22222-L y AM102. Requiere Node-RED 2.1 o posterior, sin paquetes adicionales.
 
-## Archivo para importar
+Importar [UG56-ThingsBoard-mqtt-flow.json](UG56-ThingsBoard-mqtt-flow.json). La plantilla pública tiene registro vacío, host ThingsBoard de ejemplo y ninguna credencial ni identificador real. Comienza en **simulación**.
 
-Importar [UG56-ThingsBoard-mqtt-flow.json](UG56-ThingsBoard-mqtt-flow.json). Los DevEUI están vacíos:
-configurar los equipos reales antes de usar las funciones de control.
-Los identificadores de los ejemplos de este repositorio son ficticios.
+## Migración y conexiones
 
-## Conexiones y puesta en marcha
+1. Exportar su flujo instalado y deshabilitar su pestaña antes de desplegar esta versión, para evitar comandos y suscripciones duplicados.
+2. Importar el JSON. La pestaña **Open Lab UG56 MQTT - Registry** tiene IDs nuevos y no sustituye silenciosamente el flujo anterior. Volver a introducir las credenciales en sus nuevos nodos de conexión.
+3. Configurar **EDITAR CREDENCIALES - LNS local UG56**: `127.0.0.1:1883`, sin TLS, con usuario y contraseña de su broker. Loopback funciona porque Node-RED se ejecuta en el UG56.
+4. Configurar **EDITAR TOKEN - ThingsBoard CE 3.5.0** con host real, puerto `8883`, TLS y Access Token del dispositivo marcado como gateway en ThingsBoard como usuario MQTT. Dejar contraseña vacía.
+5. Sustituir `LT_DEVEUI`, `AM_DEVEUI`, `LNS_DOWNLINK_APP_ID` y `LT_DOWNLINK_FPORT` por entradas en `DEVICE_REGISTRY`. Esas variables antiguas ya no se utilizan.
+6. Con `ENABLE_DOWNLINK=false`, desplegar y verificar telemetría y RPC en simulación. Habilitar downlinks solo después de comprobar destino, bytes, clase y FPort. En el taller bastan los indicadores incorporados del LT; no se conectan cargas externas.
 
-1. Exportar el flujo instalado y deshabilitar su pestaña antes de desplegar el nuevo. Los identificadores de esta revisión son diferentes.
-2. Importar el flujo MQTT. Configurar **EDITAR CREDENCIALES - LNS local UG56**: host `127.0.0.1`, puerto `1883`, MQTT 3.1.1, sin TLS. En Security introducir el usuario y la contraseña configurados en su broker. Las credenciales no se incluyen en el JSON ni en el material compartido.
-3. El puerto del broker MQTT local es 1883. Verificar estado conectado. `127.0.0.1` funciona porque Node-RED se ejecuta en el propio UG56.
-4. Mantener habilitado el LNS, comprobar su conexión/transmisión hacia ese broker y los codecs. El ID de aplicación depende de cada instalación. Ajustar **LNS_UPLINK_TOPIC** a `application/<APP_ID>/device/+/rx` y **LNS_DOWNLINK_APP_ID** al ID de la aplicación del LT. El valor inicial 2 corresponde únicamente a las muestras. Si ambos equipos pertenecen a la misma aplicación, usar ese mismo ID en ambos ajustes. El `+` ocupa únicamente el segmento DevEUI.
-5. Configurar el segundo broker, **EDITAR - ThingsBoard CE 3.5.0**, con host real, puerto, TLS y Access Token del dispositivo gateway como usuario. Mantener separados ambos brokers y sus credenciales. La plantilla ThingsBoard usa TLS/8883; ajustarlo al servidor real.
-6. Mantener `ENABLE_DOWNLINK=false`, hacer Deploy y activar **MQTT LNS: mensaje completo**. Revisar `msg.payload.devEUI`, `msg.payload.object`, `msg.payload.time` y `msg.topic`. El nodo MQTT in ya produce JSON: no añadir otra conversión obligatoria.
-7. Comprobar registro y telemetría de los hijos ThingsBoard. El Inject **Registrar dispositivos conocidos** repite el registro; también se ejecuta tras reconectar. Configurar el gateway ThingsBoard como gateway.
-8. Ensayar RPC en simulación. Revisar bytes y topic. Después de verificar Clase C, cableado y FPort LT, habilitar downlinks y probar una salida por vez. Examinar Packets, actuación y uplink posterior.
+La plantilla pública activa **Verify server certificate**, sin certificados de cliente ni claves privadas. Si su instalación requiere desactivarlo, desmarcar esa opción en el nodo TLS: se mantiene el cifrado, pero se omite comprobar la identidad del servidor.
 
-Uplink: LNS → broker local → MQTT in → conversor genérico → adaptador LT opcional → MQTT out ThingsBoard.
+ThingsBoard usa QoS 1; comandos MQTT locales, QoS 0. Publicaciones con Retain desactivado. `confirmed:false` es una opción LoRaWAN independiente del QoS. La respuesta del flujo no confirma aceptación por el broker, LNS ni dispositivo.
 
-Control: MQTT in ThingsBoard → función RPC → MQTT out local → broker → LNS → LT.
+## Variables: dónde están
 
-## Variables de pestaña
+Hacer doble clic en la **pestaña** del flujo → **Environment variables** → editar → **Done → Deploy**. No son nodos Function. Las funciones las leen mediante `env.get(...)`.
 
-Requieren Node-RED 2.1 o posterior.
-
-| Variable | Inicial | Uso |
+| Variable | Tipo | Finalidad |
 |---|---|---|
-| `LNS_UPLINK_TOPIC` | `application/2/device/+/rx` | Cambiar el ID del topic por el de la instalación |
-| `LNS_DOWNLINK_APP_ID` | `2` | Cambiar por el ID de aplicación del LT |
-| `LT_DEVEUI` | Vacío: configurar | Equipo controlado |
-| `AM_DEVEUI` | Vacío: opcional para registro inicial | Registro inicial AM102 |
-| `LT_DOWNLINK_FPORT` | `2` | Puerto de aplicación LoRaWAN del LT |
-| `ENABLE_DOWNLINK` | `false` | Simulación |
-| `STATE_MAX_AGE_S` | `900` | Antigüedad máxima del estado |
+| `DEVICE_REGISTRY` | JSON | Una entrada por DevEUI para registro inicial y autorización de RPC. |
+| `LNS_UPLINK_TOPIC` | Texto | Inicialmente `application/2/device/+/rx`. |
+| `ENABLE_DOWNLINK` | Booleano | `false`: simular; `true`: publicar comandos. |
+| `STATE_MAX_AGE_S` | Número | Antigüedad máxima de estado RO/DO para get; inicial 900 s. |
+| `MIN_COMMAND_GAP_S` | Número | Pausa mínima entre escrituras al mismo dispositivo; inicial 2 s. |
 
-El ID de aplicación LNS y el FPort son conceptos distintos aunque ambos valgan 2 aquí.
+No confundir intervalo de reporte, antigüedad del estado y timeout RPC. Por ejemplo: LT reportando cada 300 s, antigüedad máxima 900 s, timeout del widget 10000 ms. El flujo responde al preparar el envío, sin esperar actuación ni uplink.
 
-## Downlink MQTT
+## Registro escalable
 
-El MQTT out local deja Topic vacío y usa `msg.topic`. Ejemplo con aplicación 2, para cerrar RO1:
+Ejemplo con identificadores ficticios; reemplazarlos por sus equipos:
 
 ```json
 {
-  "topic": "application/2/device/0011223344556601/tx",
-  "payload": {"confirmed": false, "fport": 2, "data": "AwER"},
-  "qos": "0",
-  "retain": false
+  "0011223344556601": {
+    "model": "LT22222", "applicationId": "2", "fPort": 2
+  },
+  "0011223344556602": {
+    "model": "LT22222", "applicationId": "7", "fPort": 2,
+    "stateMaxAgeS": 1800
+  },
+  "0011223344556603": {
+    "model": "AM102", "applicationId": "2", "fPort": 85
+  },
+  "0011223344556604": {
+    "model": "AM102", "applicationId": "7", "fPort": 85
+  }
 }
 ```
 
-`data` contiene Base64 de `030111`; `fport` se escribe en minúsculas. Los uplinks usan `fPort`: no copiar esa capitalización al downlink. MQTT out serializa el objeto JSON. Se usa QoS 0 local para no pedir reintentos MQTT de comandos; no garantiza entrega. MQTT ThingsBoard conserva QoS 1 y deduplicación RPC en la función.
+- Clave: DevEUI de 16 caracteres hexadecimales, normalizado a minúsculas. Se rechazan duplicados con distinta capitalización.
+- `model`: exactamente `LT22222` o `AM102`. Selecciona el helper; otros modelos pueden seguir enviando uplink fuera del registro.
+- `applicationId`: ID de la aplicación del equipo en el LNS, no AppEUI/JoinEUI ni FPort.
+- `fPort`: entero 1–223 para comandos. Verificar 2 en el LT según firmware; AM102 usa 85 por defecto.
+- `stateMaxAgeS`: opcional, sustituye la variable general para ese LT. Si se omite, se aplica `STATE_MAX_AGE_S`.
 
-La propiedad `confirmed=false` pertenece a LoRaWAN, no al QoS MQTT. No se requieren los nodos LoRa Input/Output ni la mejora de payload opcional de su biblioteca. Registrar el firmware y comprobar la integración MQTT antes del taller; actualizar solo si es necesario y siguiendo las notas oficiales.
+Para añadir equipos: registrar primero OTAA y codec en el LNS, añadir una entrada al JSON, desplegar y pulsar **Registrar dispositivos conocidos**. Crear los alias/widgets de los nuevos hijos en ThingsBoard. No hacen falta variables por dispositivo ni copias del flujo.
 
-## Uplink genérico: añadir cualquier modelo
+Para varias aplicaciones, usar `application/+/device/+/rx`, o filtrar las aplicaciones autorizadas antes del conversor. Añadir una aplicación al registro **no amplía automáticamente la suscripción MQTT**. Los downlinks sí usan el ID de cada entrada.
 
-El nodo **Uplink generico: object a ThingsBoard** acepta cualquier DevEUI válido recibido del LNS. No requiere añadir su modelo, nombre de medición ni DevEUI al código. AM_DEVEUI y LT_DEVEUI son registros iniciales del taller; no son una lista de dispositivos permitidos para uplink. LT_DEVEUI sigue limitando los controles RPC y el adaptador de estados.
+Los métodos existentes get/setRO1, RO2, DO1 y DO2 no cambian. El destino del widget debe ser el hijo ThingsBoard cuyo nombre es el DevEUI en minúsculas, no el gateway lógico.
 
-1. Registrar el nuevo dispositivo en el LNS del UG56 y asignar el codec apropiado para su modelo.
-2. Comprobar que MQTT in del LNS entrega el DevEUI y `object` decodificado.
-3. Al recibir el primer uplink válido, el flujo envía `v1/gateway/connect` con el DevEUI en minúsculas como nombre y luego publica todos los campos de `object` en `v1/gateway/telemetry`.
-4. Seleccionar esas claves en el dashboard; no es necesario modificar el conversor.
+## Arquitectura
 
-Se aceptan mensajes nativos en la raíz o una envoltura JSON en `msg.payload`; alias `deveui`, `devEUI`, `eui`. `object` puede ser objeto o texto JSON. Números, booleanos y cadenas se conservan, incluidos cero y false. Objetos y listas anidados se conservan como texto JSON bajo su clave original; para graficar elementos internos haría falta un mapeo adicional. Se omiten null y valores no publicables. Los metadatos no reemplazan claves del codec.
+```text
+MQTT LNS → Uplink genérico → Estados LT por dispositivo → MQTT ThingsBoard
 
-**Límite:** este nodo formatea datos; no descifra ni decodifica bytes de cualquier fabricante. Si falta `object`, está vacío o es inválido, el mensaje se rechaza con un error de codec. No se adivinan campos de una envoltura aplanada: debe adaptarse a `object` antes de este nodo.
+                                      ┌→ Helper LT: control RO/DO ─┐
+MQTT ThingsBoard → Registro y método ──┤                           ├→ Emisor genérico → MQTT LNS
+                                      └→ Helper: intervalo ───────┘
+```
 
-**Opcional LT: estados para RPC** es el único nodo uplink específico de un modelo. Añade los booleanos de RO/DO y guarda el estado para las consultas RPC. Puede puentearse conectando el conversor genérico directamente a la salida MQTT cuando solo se necesite telemetría genérica. El control del LT requiere mantenerlo.
+Los helpers generan los bytes del protocolo. El emisor común recibe hex, valida, consulta el registro y publica en `application/<applicationId>/device/<DevEUI>/tx`, con la envoltura siguiente (`data` es Base64):
 
-Los dispositivos descubiertos se guardan en contexto de flujo para volver a registrarlos tras una reconexión MQTT. Con el almacenamiento en memoria predeterminado, la lista se pierde al reiniciar Node-RED y se reconstruye con los siguientes uplinks. El registro no crea automáticamente los widgets del dashboard.
+```json
+{"confirmed":false,"fport":2,"data":"AwER"}
+```
 
-## Comandos y RPC
+Dejar vacío el topic de **Downlink LNS local** para usar `msg.topic`. El emisor no codifica comandos de fabricante. No se expone un método raw al dashboard.
 
-| Acción | Método / parámetro JSON | Hexadecimal | Base64 generado |
+## Control LT y estado
+
+| Acción | Método | Parámetro JSON | Hex generado |
 |---|---|---|---|
-| Abrir RO1 | `setRO1` / `false` | `030011` | `AwAR` |
-| Cerrar RO1 | `setRO1` / `true` | `030111` | `AwER` |
-| Abrir RO2 | `setRO2` / `false` | `031100` | `AxEA` |
-| Cerrar RO2 | `setRO2` / `true` | `031101` | `AxEB` |
-| Liberar DO1 | `setDO1` / `false` | `02001111` | `AgAREQ==` |
-| Activar DO1 | `setDO1` / `true` | `02011111` | `AgEREQ==` |
-| Liberar DO2 | `setDO2` / `false` | `02110011` | `AhEAEQ==` |
-| Activar DO2 | `setDO2` / `true` | `02110111` | `AhEBEQ==` |
+| Cerrar / abrir RO1 | `setRO1` | `true` / `false` | `030111` / `030011` |
+| Cerrar / abrir RO2 | `setRO2` | `true` / `false` | `031101` / `031100` |
+| Activar / liberar DO1 | `setDO1` | `true` / `false` | `02011111` / `02001111` |
+| Activar / liberar DO2 | `setDO2` | `true` / `false` | `02110111` / `02110011` |
 
-`true` cierra el relé o activa la salida NPN (L). `false` abre el relé o libera la salida NPN. Los bytes `11` dejan las otras salidas sin cambios.
+Booleanos sin comillas; también se admiten números 0/1. Los bytes `11` conservan salidas vecinas. LED RO encendido indica relé cerrado; LED DO encendido indica salida activa L. Comparar LED y uplink posterior.
 
-Los widgets y los métodos get/setRO1, RO2, DO1 y DO2 no cambian. La función solo permite controlar el LT configurado; el uplink admite cualquier dispositivo decodificado de la aplicación suscrita.
+`getRO1`, `getRO2`, `getDO1` y `getDO2` devuelven booleanos del último estado recibido. Se rechaza estado ausente o antiguo. La memoria es independiente por dispositivo **y por salida**: un reporte de RO1 no renueva la antigüedad de RO2. Uplinks atrasados no sustituyen estados más recientes. Enviar una orden no cambia el estado almacenado.
 
-## Estado y límites de la validación
+## Intervalo de reporte desde ThingsBoard
 
-La respuesta de escritura indica `accepted=true`, `stage=submitted_to_mqtt_node`, `executed=false`. Confirma entrega a la ruta local, no aceptación por el LNS ni actuación. Revisar Packets, carga y uplink posterior.
+1. Añadir un widget que permita enviar método RPC y parámetros JSON, dirigido al hijo LT o AM102.
+2. Método: **`setReportingInterval`**. Parámetros: **`300`**, sin comillas ni objeto envolvente. Significa 300 segundos = 5 minutos.
+3. Usar petición de dos vías y timeout 10000 ms. No configurar `getReportingInterval`: esta revisión no ofrece lectura verificada del intervalo.
+4. Probar en simulación y revisar **Comando preparado / simulacion**. Habilitar downlinks y enviar una solicitud nueva.
 
-Las consultas `getRO1`, `getRO2`, `getDO1` y `getDO2` devuelven el último estado recibido; no realizan un sondeo instantáneo. Las claves son `ro1_active`, `ro2_active`, `do1_active`, `do2_active`. Un estado ausente o más antiguo que `STATE_MAX_AGE_S` se rechaza.
+ThingsBoard construye la envoltura Gateway API; el widget solo define método y parámetros:
 
-Se mantiene una pausa mínima de dos segundos entre órdenes y protección de ID RPC duplicado durante dos minutos, en memoria. Reiniciar Node-RED borra esa protección. No se garantiza entrega exactamente una vez.
+```json
+{
+  "device": "0011223344556603",
+  "data": {"id": 42, "method": "setReportingInterval", "params": 300}
+}
+```
 
-El flujo conserva el timestamp original. Reproducir las muestras no crea mediciones actuales; ajustar la ventana temporal del dashboard.
+| Modelo | Rango admitido por este flujo | Codificación | Ejemplo 300 s |
+|---|---|---|---|
+| LT22222 | 30–86400 s | `01` + 3 bytes, big endian | `0100012c` |
+| AM102 | 60–64800 s | `ff03` + 2 bytes, little endian | `ff032c01` |
 
-## Fuentes
+El rango LT de 30 s a 24 h es una política de esta plantilla, no el rango completo del campo de tres bytes. AM102 se limita al rango publicado de 1–1080 minutos. Solo se aceptan segundos enteros; se rechazan texto, booleanos, fracciones y valores fuera de rango.
 
-- [Milesight: LoRa Input y codec](https://support.milesight-iot.com/support/solutions/articles/73000535734-how-to-use-decoder-on-node-red)
-- [Milesight: downlink MQTT](https://support.milesight-iot.com/support/solutions/articles/73000514234-fail-to-control-device-via-mqtt-downlink-command)
-- [Node-RED: variables](https://nodered.org/docs/user-guide/environment-variables)
-- Exportación nativa y muestras del usuario.
+AM102 Clase A recibe tras un uplink y puede conservar el intervalo anterior hasta entonces. No confundir reporte con retransmisión de históricos ni refresco de pantalla. Comprobar el cambio por ToolBox/consola o varios uplinks periódicos posteriores, distinguiendo eventos e históricos. El flujo no ajusta automáticamente `STATE_MAX_AGE_S`.
 
+## Respuestas RPC y diagnóstico
+
+En simulación: `accepted:false`, `stage:simulation`, `executed:false` y hex preparado; no publica al LNS. Activar la variable no reproduce comandos anteriores.
+
+Una escritura enviada responde en `v1/gateway/rpc`:
+
+```json
+{
+  "device":"0011223344556603", "id":42,
+  "data":{
+    "accepted":true, "stage":"submitted_to_mqtt_node",
+    "executed":false, "requestedIntervalSeconds":300
+  }
+}
+```
+
+Confirma preparación y entrega al nodo MQTT, no ejecución física. Errores de registro, método, parámetro, estado o frecuencia responden con `accepted:false` y `error`. Mensajes sin destino/ID utilizables se muestran en Catch; los ecos de respuestas se ignoran.
+
+Para un timeout, activar **RPC recibido (activar para diagnostico)** y **Respuesta RPC (activar para diagnostico)**. Comprobar destino hijo, token del gateway, suscripción `v1/gateway/rpc`, registro y errores Catch. La respuesta no espera una confirmación por radio.
+
+Se deduplican escrituras por DevEUI + ID durante 120 s. Una repetición devuelve la respuesta anterior sin reenviar; el mismo ID con distinto comando o ruta se rechaza. La pausa de 2 s se aplica por dispositivo. Reiniciar Node-RED borra la memoria; no se garantiza entrega exactamente una vez.
+
+## Uplink e históricos
+
+Todo DevEUI válido con `object` decodificado puede enviar telemetría, aunque no esté en el registro. Se registra en ThingsBoard al primer uplink. El registro sí es necesario para RPC y el adaptador de estados LT.
+
+Números, booleanos y cadenas se conservan. Objetos/listas anidados, incluido `object.history`, se publican como texto JSON. No se reconstruye la serie histórica con sus timestamps. El conversor no sustituye al codec. Los dispositivos descubiertos se vuelven a registrar tras reconexión; con contexto en memoria, se redescubren después de reiniciar.
+
+## Validación y fuentes
+
+**28 grupos de pruebas locales** sobre los Function y conexiones del JSON exportado: cuatro dispositivos, aplicaciones distintas, ocho comandos LT, intervalos/límites, simulación, respuestas, estado por salida, duplicados, errores, muestras MQTT v2 y exportación sin credenciales. Falta el ensayo con el UG56 y ThingsBoard reales; no se ha enviado ningún comando al hardware durante estas pruebas.
+
+- [Dragino LT-22222-L: comandos e indicadores](https://wiki.dragino.com/docs/LoRaWAN-End-Node/io-controllers-sensor-nodes/lt-22222-l/)
+- [Milesight AM102: comandos](https://www.milesight.com/products/docs/en/am102/protocol/am100/am10x-downlink.html)
+- [Milesight AM102: intervalo de reporte](https://www.milesight.com/products/docs/en/am102/steps/am100/general-settings.html)
+- [ThingsBoard Gateway RPC](https://thingsboard.io/docs/reference/gateway-api/rpc/)
+- [Node-RED: variables de entorno](https://nodered.org/docs/user-guide/environment-variables)
 
 ## Licencia
 
-Este flujo y sus instrucciones se distribuyen bajo la [licencia MIT](LICENSE).
-Copyright (c) 2026 Gonzalo Silva.
+Flujo e instrucciones bajo [licencia MIT](LICENSE). Copyright (c) 2026 stingray-altronics.
